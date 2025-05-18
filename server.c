@@ -3,7 +3,6 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
-#include <netinet/in.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <assert.h>
@@ -312,6 +311,9 @@ int main(int argc, char **argv) {
     size_t conns_n = 0;
     
     while (!finish) {
+        // In case of crashes
+        fflush(logfile);
+        
         accept_all(server, &conns, &conns_n);
         receive_and_resend(&conns, &conns_n);
         delete_marked(&conns, &conns_n);

@@ -1,16 +1,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <fcntl.h>
-#include <poll.h>
 #include <assert.h>
-#include <errno.h>
-#include <unistd.h>
 #include <signal.h>
 #include <time.h>
+#include <stdint.h>
+
+////////////////////////////////
+
+#ifdef _WIN32
+#include <winsock2.h>
+#define SHUT_RDWR SD_BOTH
+#define MSG_NOSIGNAL 0
+#else
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#endif
 
 ////////////////////////////////
 
@@ -22,11 +27,38 @@ typedef uint32_t u32;
 
 // NOTE(w): legacy, rework this
 #define T_USER 1
-#define T_KEYSUM 0
-#define T_BYE 3
+//#define T_KEYSUM 0
+//#define T_BYE 3
+
+////////////////////////////////
+// Message format
+// HEADER
+//   1b type
+//   1b nonce (used in encryption)
+//   2b len   (of the message)
+//   2b userid
+// BODY
+//   lenXb encrypted message
 
 ////////////////////////////////
 // Helpers
+
+// Why doesn't windows have this functions?
+#ifdef _WIN32
+size_t getline(char **lineptr, size_t *n, FILE *stream) {
+    assert(*lineptr == NULL);
+    // I hope you don't need more than 1024 chars...
+    *n = 1024;
+    *lineptr = malloc(1024);
+    
+    if (fgets(*lineptr, 1024, stream) == NULL) {
+        perror("fgets()");
+        exit(1);
+    }
+    
+    return strlen(*lineptr);
+}
+#endif
 
 char *strip(uint32_t ip) {
     static char buf[16] = {0};
@@ -95,6 +127,20 @@ char *gen_userid(void) {
     return userid;
 }
 
+void sockperror(const char *str) {
+#ifdef _WIN32
+    int err = WSAGetLastError();
+    char *msg = NULL;
+    FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                   FORMAT_MESSAGE_FROM_SYSTEM,
+                   NULL, err, 0, (LPSTR)&msg, 0, NULL);
+    printf("%s: %s\n", str, msg);
+    LocalFree(msg);
+#else
+    perror(str);
+#endif
+}
+
 ////////////////////////////////
 // Cryptography
 // NOTE(w): this cryptography is rather weak.
@@ -147,7 +193,7 @@ byte *decrypt(byte *text,
 
 void dosend(int fd, byte *data, size_t len) {
     if (send(fd, data, len, MSG_NOSIGNAL) < 0) {
-        perror("send()");
+        sockperror("send()");
         exit(1);
     }
 }
@@ -193,7 +239,7 @@ byte *receive(int fd, size_t *sz) {
     
     while (1) {
         if ((res = recv(fd, buf, 128, 0)) < 0) {
-            perror("recv()");
+            sockperror("recv()");
             exit(1);
         }
         // The connection was closed (gracefully)
@@ -281,8 +327,6 @@ int main(int argc, char **argv) {
     
     printf("Server: %s:%d\n", strip(addr), port);
     
-    ////////////////////////////////
-    
     signal(SIGINT, intrhandle);
     
     ////////////////////////////////
@@ -308,7 +352,7 @@ int main(int argc, char **argv) {
     sa.sin_port = htons(port);
     
     if (connect(fd, (struct sockaddr*)&sa, sizeof(struct sockaddr_in)) < 0) {
-        perror("connect()");
+        sockperror("connect()");
         return 1;
     }
     
@@ -322,6 +366,8 @@ int main(int argc, char **argv) {
     while (!finish) {
         receive_all_and_print(fd, key);
         
+        ////////////////////////////////
+        
         printf("> ");
         char *line = NULL;
         size_t sz;
@@ -331,8 +377,8 @@ int main(int argc, char **argv) {
         
         if (len < 0) {
             perror("getline()");
-            close(fd);
-            return 1;
+            free(line);
+            break;
         }
         
         if (len <= 1) {
@@ -342,13 +388,13 @@ int main(int argc, char **argv) {
         
         line[len-1] = 0;
         
+        ////////////////////////////////
         
         nonce++;
         sendmessage(fd, userid, line, key, nonce);
         
-        
         free(line);
     }
     
-    close(fd);
+    shutdown(fd, SHUT_RDWR);
 }

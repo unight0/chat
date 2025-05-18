@@ -283,6 +283,10 @@ int main(int argc, char **argv) {
     
     ////////////////////////////////
     
+    signal(SIGINT, intrhandle);
+    
+    ////////////////////////////////
+    
     char *key = query_key();
     
     ////////////////////////////////
@@ -315,7 +319,7 @@ int main(int argc, char **argv) {
     
     byte nonce = 0;
     
-    for (;!finish;) {
+    while (!finish) {
         receive_all_and_print(fd, key);
         
         printf("> ");

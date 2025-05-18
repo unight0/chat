@@ -9,6 +9,8 @@
 #include <assert.h>
 #include <errno.h>
 #include <unistd.h>
+#include <signal.h>
+#include <time.h>
 
 ////////////////////////////////
 
@@ -24,8 +26,14 @@ struct Conn {
     u16 port;
 };
 
+FILE *logfile = NULL;
+
 ////////////////////////////////
 // Helpers
+
+#define logthis(f, ...)\
+(printf(f, ##__VA_ARGS__),\
+fprintf(logfile, f, ##__VA_ARGS__))
 
 char *strip(uint32_t ip) {
     static char buf[16] = {0};
@@ -63,7 +71,7 @@ void accept_all(int server, Conn **conns, size_t *n) {
     u16 port = ntohs(saddr.sin_port);
     u32 addr = ntohl(saddr.sin_addr.s_addr);
     
-    printf("Accepted %s:%d\n", strip(addr), port);
+    logthis("Accepted %s:%d as fd=%d\n", strip(addr), port, fd);
     
     
     ////////////////////////////////
@@ -111,7 +119,7 @@ byte *receive(int fd, size_t *sz, int *close) {
         break;
     }
     
-    printf("Received data\n");
+    logthis("Received data (fd=%d)\n", fd);
     
     return data;
 }
@@ -195,9 +203,9 @@ void delete_marked(Conn **conns, size_t *n) {
             j++;
             continue;
         }
-        printf("Deleting %s:%d\n",
-               strip((*conns)[i].addr),
-               (*conns)[i].port);
+        logthis("Deleting %s:%d\n",
+                strip((*conns)[i].addr),
+                (*conns)[i].port);
     }
     
     free(*conns);
@@ -206,10 +214,19 @@ void delete_marked(Conn **conns, size_t *n) {
     *conns = conns2;
 }
 
+////////////////////////////////
+
+int finish = 0;
+void intrhandle(int _sig) {
+    (void)_sig;
+    finish = 1;
+}
+
+////////////////////////////////
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        printf("Provide listen port\n");
+    if (argc != 3) {
+        printf("Provide listen port and log file\n");
         return -1;
     }
     
@@ -219,6 +236,21 @@ int main(int argc, char **argv) {
         printf("Invalid port\n");
         return -1;
     }
+    
+    logfile = fopen(argv[2], "a");
+    if (logfile == NULL) {
+        perror("fopen()");
+        return 1;
+    }
+    
+    time_t t = time(NULL);
+    fprintf(logfile, "\nSession begin %s\n", ctime(&t));
+    
+    ////////////////////////////////
+    
+    signal(SIGINT, intrhandle);
+    
+    ////////////////////////////////
     
     int server = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     
@@ -271,7 +303,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     
-    printf("Listening on %d\n", lport);
+    logthis("Listening on %d\n", lport);
     
     ////////////////////////////////
     // Main loop
@@ -279,10 +311,14 @@ int main(int argc, char **argv) {
     Conn *conns = NULL;
     size_t conns_n = 0;
     
-    for (;;) {
+    while (!finish) {
         accept_all(server, &conns, &conns_n);
         receive_and_resend(&conns, &conns_n);
         delete_marked(&conns, &conns_n);
         usleep(1000 * 200);
     }
+    
+    close(server);
+    free(conns);
+    fclose(logfile);
 }

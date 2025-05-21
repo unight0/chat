@@ -5,6 +5,8 @@ chatting programm. It consists of two parts: a server
 and a client. Clients can connect to the server to
 exchange messages between each other.
 
+![](./example-image.png)
+
 ## Encryption
 Encryption in this project is rather weak, so don't
 use it for anything serious. We are relying on a

@@ -39,3 +39,7 @@ for linux.
 Start the server on the server host like so:
 `./server <port> <logfile>`. Then connect
 to the server using `./client XXX.XXX.XXX.XXX:PORT`.
+Alternatively, start the `./gui-client`, enter
+your preshared key, and then click `connect`.
+After the connection has been established,
+you can chat.

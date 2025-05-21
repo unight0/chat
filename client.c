@@ -43,7 +43,7 @@ typedef uint32_t u32;
 ////////////////////////////////
 // Helpers
 
-// Why doesn't windows have this functions?
+// Why doesn't windows have this function?
 #ifdef _WIN32
 size_t getline(char **lineptr, size_t *n, FILE *stream) {
     assert(*lineptr == NULL);
@@ -145,7 +145,7 @@ void sockperror(const char *str) {
 // Cryptography
 // NOTE(w): this cryptography is rather weak.
 // I think it could rather easily be cracked,
-// but at the same, time no one knows this 
+// but at the same time, no one knows this 
 // chat protocol.
 // Thus we achieve security through obscurity.
 
@@ -262,7 +262,12 @@ byte *receive(int fd, size_t *sz) {
 }
 
 // Receive all messages and print them
-void receive_all_and_print(int fd, char *key) {
+void receive_all_and_print(int fd, char *key
+#ifdef GUI_CLIENT
+                           , char ***msgs,
+                           int *msgs_n
+#endif
+                           ) {
     while (1) {
         fd_set readfs;
         FD_ZERO(&readfs);
@@ -294,7 +299,16 @@ void receive_all_and_print(int fd, char *key) {
         memcpy(msg, data+6, len);
         msg[len] = 0;
         
+#ifndef GUI_CLIENT
         printf("[%c%c] %s\n", id[0], id[1], msg);
+#else
+        char *fullmsg = malloc(len+5+1);
+        snprintf(fullmsg, len+5+1, "[%c%c] %s", id[0], id[1], msg);
+        
+        (*msgs_n)++;
+        *msgs = realloc(*msgs, sizeof(char*)*(*msgs_n));
+        (*msgs)[*msgs_n-1] = fullmsg;
+#endif
         
         free(data);
     }
@@ -310,6 +324,7 @@ void intrhandle(int _sig) {
 
 ////////////////////////////////
 
+#ifndef GUI_CLIENT
 int main(int argc, char **argv) {
     if (argc != 2) {
         printf("Provide the ip and port of the server\n");
@@ -398,3 +413,179 @@ int main(int argc, char **argv) {
     
     shutdown(fd, SHUT_RDWR);
 }
+#else
+#include <raylib.h>
+
+#define RAYGUI_IMPLEMENTATION
+// NOTE(w): Just enough to fit the text (text is 0.04)
+#define RAYGUI_MESSAGEBOX_BUTTON_HEIGHT floorf(0.045*GetScreenHeight())
+#define RAYGUI_TEXTINPUTBOX_BUTTON_HEIGHT floorf(0.045*GetScreenHeight())
+#define RAYGUI_TEXTINPUTBOX_HEIGHT floorf(0.045*GetScreenHeight())
+#include "raygui.h"
+
+// I don't know why raylib includes pressing escape as a reason
+// for WindowShouldClose() by default
+#define CLOSE() (WindowShouldClose() && !IsKeyPressed(KEY_ESCAPE))
+
+#define RELRECT(x,y,w,h) (Rectangle){x*GetScreenWidth(), y*GetScreenHeight(), w*GetScreenWidth(), h*GetScreenHeight()}
+
+char *trimleft(char *str) {
+    for(;isspace(*str); str++);
+    return str;
+}
+
+int try_connect(u32 addr, u16 port) {
+    int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(struct sockaddr_in));
+    sa.sin_family = AF_INET;
+    sa.sin_addr.s_addr = htonl(addr);
+    sa.sin_port = htons(port);
+    
+    if (connect(fd, (struct sockaddr*)&sa, sizeof(struct sockaddr_in)) < 0) {
+        sockperror("connect()");
+        return -1;
+    }
+    
+    return fd;
+}
+
+int main(void) {
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+    InitWindow(480, 660, "guitext");
+    SetTargetFPS(60);
+    
+    Font font = LoadFontEx("CascadiaCode.ttf", 50, NULL, 0);
+    SetTextureFilter(font.texture, TEXTURE_FILTER_BILINEAR);
+    GuiSetFont(font);
+    GuiSetStyle(DEFAULT, TEXT_SIZE, 27);
+    
+    char **msgs = NULL;
+    char *userid;
+    int running = 1, finish_query = 0, msgs_n = 0, connected = 0, connect_popup = 0, have_key = 0;
+    int fd = -1;
+    byte nonce;
+    char input[128], ipinput[128], key[128];
+    memset(input, 0, 128);
+    memset(ipinput, 0, 128);
+    memset(key, 0, 128);
+    
+    // Message threshold
+    int msg_t = 16;
+    
+    while (!CLOSE() && running) {
+        BeginDrawing();
+        ClearBackground(GetColor(GuiGetStyle(DEFAULT, BACKGROUND_COLOR)));
+        
+        GuiSetStyle(DEFAULT, TEXT_SIZE, floorf(0.04*GetScreenHeight()));
+        
+        if (connected)
+            receive_all_and_print(fd, key, &msgs, &msgs_n);
+        
+        int beg = 0;
+        if (msgs_n >= msg_t) beg = msgs_n-msg_t;
+        for (int i = beg; i < msgs_n; i++) {
+            GuiLabel(RELRECT(0.062, (0.055 + 0.05*(i-beg+1)), 0.94, 0.05), msgs[i]);
+        }
+        
+        if (GuiButton(RELRECT(0.05, 0.036, 0.25, 0.045), "Exit")) {
+            finish_query = 1;
+        }
+        
+        if (finish_query) {
+            int res = GuiMessageBox(RELRECT(0.18, 0.1, 0.52, 0.15), "", "Are you sure?", "Exit");
+            if (res >= 0) finish_query = 0;
+            if (res == 1) running = 0;
+        }
+        
+        ////////////////////////////////
+        
+        if (!have_key) {
+            int res = GuiTextInputBox(RELRECT(0.18, 0.1, 0.5, 0.2), "", "Input preshared key", "Exit;Done", key, 128, 0);
+            if (res == 1) {
+                exit(0);
+            }
+            if (res == 2) {
+                if (strlen(key) <= 2) {
+                    EndDrawing();
+                    continue;
+                }
+                have_key = 1;
+                
+                userid = gen_userid();
+                char *msg = malloc(16+1);
+                snprintf(msg, 16+1, "Your id is '%c%c'", userid[0], userid[1]);
+                msgs_n++;
+                msgs = realloc(msgs, sizeof(char*)*msgs_n);
+                msgs[msgs_n-1] = msg;
+            }
+        }
+        
+        ////////////////////////////////
+        
+        if (!connected) {
+            if (GuiButton(RELRECT(0.7, 0.036, 0.25, 0.045), "Connect")) {
+                connect_popup = 1;
+            }
+        }
+        else {
+            if (GuiButton(RELRECT(0.7, 0.036, 0.25, 0.045), "Disconnect")) {
+                connected = 0;
+            }
+        }
+        
+        
+        if (connect_popup) {
+            int res = GuiTextInputBox(RELRECT(0.18, 0.1, 0.5, 0.2), "", "Input ip with port", "Abort;Done", ipinput, 128, 0);
+            if (res >= 0) connect_popup = 0;
+            if (res == 2) {
+                u32 addr;
+                u16 port;
+                if(parseip(ipinput, &addr, &port)) {
+                    char *msg = malloc(17+1);
+                    snprintf(msg, 17+1, "Invalid ip format");
+                    msgs_n++;
+                    msgs = realloc(msgs, sizeof(char*)*msgs_n);
+                    msgs[msgs_n-1] = msg;
+                    EndDrawing();
+                    continue;
+                }
+                fd = try_connect(addr, port);
+                if (fd < 0) {
+                    char *msg = malloc(19+1);
+                    snprintf(msg, 19+1, "Connection refused");
+                    msgs_n++;
+                    msgs = realloc(msgs, sizeof(char*)*msgs_n);
+                    msgs[msgs_n-1] = msg;
+                    EndDrawing();
+                    continue;
+                }
+                connected = 1;
+            }
+        }
+        
+        ////////////////////////////////
+        
+        if (GuiTextBox(RELRECT(0.083, 0.9, 0.83, 0.05), input, 128, connected)) {
+            printf("Text box input: %s\n", input);
+            char *i = trimleft(input);
+            if (strlen(i)) {
+                char *msg = malloc(strlen(i)+1);
+                strcpy(msg, i);
+                msgs_n++;
+                msgs = realloc(msgs, sizeof(char*)*msgs_n);
+                msgs[msgs_n-1] = msg;
+                
+                nonce++;
+                sendmessage(fd, userid, i, key, nonce);
+                memset(input, 0, 128);
+            }
+        }
+        
+        EndDrawing();
+    }
+    if (fd >= 0) shutdown(fd, SHUT_RDWR);
+    UnloadFont(font);
+}
+#endif

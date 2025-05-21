@@ -1,4 +1,5 @@
 client
+gui-client
 server
 win-client*
 logfile.txt

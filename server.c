@@ -281,6 +281,7 @@ int main(int argc, char **argv) {
     
     ////////////////////////////////
     // Set non-blocking
+    
     int flags = fcntl(server, F_GETFL, 0);
     if (flags == -1) {
         perror("fcntl()");
